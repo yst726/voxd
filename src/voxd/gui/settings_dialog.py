@@ -139,6 +139,30 @@ class SettingsDialog(QDialog):
         self._add_filepicker(form, "whisper_model_path", "Browse", filter="*.bin")
 
         # ------------------------------------------------------------------
+        #  Volcengine (火山引擎/豆包) cloud ASR
+        # ------------------------------------------------------------------
+        form.addRow(self._section_label("Volcengine ASR (cloud)"), QLabel(""))
+
+        volc_enabled = self._add_checkbox(form, "volcengine_asr_enabled", "Use Volcengine ASR")
+
+        volc_key = QLineEdit(str(self.cfg.data.get("volcengine_access_token", "")))
+        volc_key.setPlaceholderText("Your API Key from Volcengine Speech console")
+        volc_key.setEchoMode(QLineEdit.EchoMode.Password)
+        form.addRow("API Key", volc_key)
+        self._widgets["volcengine_access_token"] = volc_key
+
+        volc_rid = QLineEdit(str(self.cfg.data.get("volcengine_resource_id", "volc.seedasr.auc")))
+        volc_rid.setPlaceholderText("volc.seedasr.auc")
+        form.addRow("Resource ID", volc_rid)
+        self._widgets["volcengine_resource_id"] = volc_rid
+
+        def _toggle_volc_widgets(state: bool):
+            volc_key.setEnabled(state)
+            volc_rid.setEnabled(state)
+        _toggle_volc_widgets(volc_enabled.isChecked())
+        volc_enabled.toggled.connect(_toggle_volc_widgets)
+
+        # ------------------------------------------------------------------
         #  Fin
         # ------------------------------------------------------------------
         main_vbox.addWidget(scroll)

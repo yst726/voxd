@@ -553,7 +553,7 @@ else
   export SETUPTOOLS_SCM_PRETEND_VERSION="${VOXD_PRETEND_VERSION:-0.0.0}"
 fi
 
-pip install -e .
+pip install -e ".[volcengine]"
 
 # Fix editable install .pth file if it's empty (hatchling bug workaround)
 PTH_FILE=".venv/lib/python3.12/site-packages/_voxd.pth"

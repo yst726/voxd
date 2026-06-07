@@ -1,11 +1,11 @@
 log_enabled: true
-log_location: ''
+log_location: ""
 perf_collect: false
 perf_accuracy_rating_collect: true
 typing: true
 typing_delay: 1
 typing_start_delay: 0.15
-ctrl_v_paste: false  # Use Ctrl+V instead of default Ctrl+Shift+V
+ctrl_v_paste: false # Use Ctrl+V instead of default Ctrl+Shift+V
 append_trailing_space: true
 verbosity: false
 autostart: false
@@ -24,10 +24,15 @@ whisper_binary: whisper.cpp/build/bin/whisper-cli
 whisper_model_path: whisper.cpp/models/ggml-base.en.bin
 language: en
 
+# --- Volcengine (火山引擎/豆包) streaming ASR --------------------------------
+volcengine_asr_enabled: false
+volcengine_access_token: ""
+volcengine_resource_id: "volc.seedasr.auc"
+
 # --- Flux (VAD-driven continuous dictation) ---------------------------------
-flux_min_silence_ms: 500     # pause to finalize an utterance
-flux_min_speech_ms: 200      # minimum speech before opening a segment
-flux_pre_roll_ms: 180        # prepend audio before detection
+flux_min_silence_ms: 500 # pause to finalize an utterance
+flux_min_speech_ms: 200 # minimum speech before opening a segment
+flux_pre_roll_ms: 180 # prepend audio before detection
 # Flux VAD (single backend)
 flux_energy_start_margin_db: 6.0
 flux_energy_keep_margin_db: 3.0
@@ -61,7 +66,8 @@ aipp_active_prompt: default
 # List of models per provider
 aipp_models:
   llamacpp_server: ["qwen2.5-3b-instruct-q4_k_m"]
-  ollama: ["llama3.2:latest", "mistral:latest", "gemma3:latest", "qwen2.5-coder:1.5b"]
+  ollama:
+    ["llama3.2:latest", "mistral:latest", "gemma3:latest", "qwen2.5-coder:1.5b"]
   openai: ["gpt-4o-mini-2024-07-18"]
   anthropic: ["claude-3-opus-20240229", "claude-3-haiku"]
   xai: ["grok-3-latest"]
@@ -80,7 +86,6 @@ llamacpp_cli_path: "llama.cpp/build/bin/llama-cli"
 llamacpp_default_model: "llamacpp_models/qwen2.5-3b-instruct-q4_k_m.gguf"
 llamacpp_server_url: "http://localhost:8080"
 llamacpp_server_timeout: 30
-
 
 aipp_prompts:
   default: "Rewrite the following input so that it is clean and concise. Do not add any additional text or commentary. Just the rewritten text."

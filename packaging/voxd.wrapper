@@ -38,36 +38,26 @@ fi
 
 # Guard against too-old system Python (e.g., Leap 15.x ships 3.6)
 if [[ "$PY" != "$APPDIR/.venv/bin/python" && "$PY" != "$USER_VENV/bin/python" ]]; then
-  ver="$($PY - <<'PY'
-import sys
-print(f"{sys.version_info.major}.{sys.version_info.minor}")
-PY
-)"
-  log "System Python version: $ver"
-  case "$ver" in
-    3.9|3.10|3.11|3.12|3.13) : ;;
-    *)
-      # Attempt to create a user-local venv with any newer Python found
-      pick_python() {
-        for c in python3.12 python3.11 python3.10 python3.9 python3; do
-          if command -v "$c" >/dev/null 2>&1; then
-            v="$($c - <<'PY'
-import sys
-print(f"{sys.version_info.major}.{sys.version_info.minor}")
-PY
-)"
-            case "$v" in
-              3.9|3.10|3.11|3.12|3.13) echo "$c"; return 0 ;;
-              *) : ;;
-            esac
-          fi
-        done
-        echo ""
-      }
-      log "Attempting to locate newer system Python (>=3.9)"
-      CAND="$(pick_python)"
-      if [[ -n "$CAND" ]]; then
-        log "Found newer interpreter: $CAND"
+  ver="$($PY -c 'import sys; print(sys.version_info.major * 100 + sys.version_info.minor)' 2>/dev/null)"
+  log "System Python version code: $ver"
+  # Require Python >= 3.9 (value >= 309)
+  if [[ -n "$ver" && "$ver" -ge 309 ]] 2>/dev/null; then
+    : # version is OK
+  else
+    # Attempt to create a user-local venv with any newer Python found
+    pick_python() {
+      for c in python3.12 python3.11 python3.10 python3.9 python3; do
+        if command -v "$c" >/dev/null 2>&1; then
+          v="$($c -c 'import sys; print(sys.version_info.major * 100 + sys.version_info.minor)' 2>/dev/null)"
+          if [[ -n "$v" && "$v" -ge 309 ]] 2>/dev/null; then echo "$c"; return 0; fi
+        fi
+      done
+      echo ""
+    }
+    log "Attempting to locate newer system Python (>=3.9)"
+    CAND="$(pick_python)"
+    if [[ -n "$CAND" ]]; then
+      log "Found newer interpreter: $CAND"
         mkdir -p "$(dirname "$USER_VENV")"
         log "Creating user venv at $USER_VENV"
         "$CAND" -m venv --system-site-packages "$USER_VENV" || true
@@ -86,8 +76,7 @@ PY
         echo "[voxd] System Python $ver is unsupported and no newer Python was found. Use 'bash packaging/install_voxd.sh <rpm>' to provision a newer Python, or create $APPDIR/.venv with Python >= 3.9." >&2
         exit 1
       fi
-      ;;
-  esac
+  fi
 fi
 
 # Ensure Python can import the embedded source tree

@@ -55,6 +55,7 @@ overrides:
       - xclip
       - xsel
       - wl-clipboard
+      - wtype
       - xdotool
       - python3-platformdirs
       - python3-venv
@@ -69,7 +70,7 @@ overrides:
       - python3-pyqtgraph
       # python3-sounddevice not available on all Ubuntu versions; install via venv in postinstall
     recommends:
-      - ydotool
+      - ydotool      # only needed for old ydotool-type; wtype is preferred
       - pavucontrol
       - alsa-plugins
       - pulseaudio | pipewire-pulse

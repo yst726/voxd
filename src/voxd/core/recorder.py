@@ -8,12 +8,21 @@ from voxd.utils.libw import verbo, verr
 
 
 class AudioRecorder:
-    def __init__(self, samplerate=16000, channels=1, *, record_chunked: bool | None = None, chunk_seconds: int | None = None):
+    def __init__(self, samplerate=16000, channels=1, *, record_chunked: bool | None = None, chunk_seconds: int | None = None, on_audio_frame=None):
+        """
+        Parameters
+        ----------
+        on_audio_frame : callable or None
+            If set, called from the audio thread with (pcm_bytes, samplerate) on every
+            chunk. Must be non-blocking (real-time audio context). The PCM data is
+            16-bit mono, whatever the device's native format is after conversion.
+        """
         from voxd.core.config import AppConfig
         cfg = AppConfig()
         self.fs = samplerate
         self.channels = channels
         self.recording = []
+        self.on_audio_frame = on_audio_frame
         self.is_recording = False
         self.temp_dir = Path(tempfile.gettempdir()) / "voxd_temp"
         self.temp_dir.mkdir(exist_ok=True)
@@ -52,11 +61,16 @@ class AudioRecorder:
         def callback(indata, frames, time, status):
             if status:
                 verbo(f"[recorder] Warning: {status}")
+            # Convert to 16-bit PCM bytes once (used by both paths)
+            try:
+                x = np.clip(indata.copy(), -1.0, 1.0)
+                pcm_bytes = (x * 32767.0).astype(np.int16).tobytes()
+            except Exception:
+                pcm_bytes = b""
+
             if self.record_chunked:
                 try:
-                    x = np.clip(indata.copy(), -1.0, 1.0)
-                    pcm = (x * 32767.0).astype(np.int16).tobytes()
-                    self._chunk_wave.writeframes(pcm)
+                    self._chunk_wave.writeframes(pcm_bytes)
                     self._chunk_written_frames += frames
                     # Rotate chunk if needed
                     if self._chunk_written_frames >= self._chunk_target_frames:
@@ -69,12 +83,36 @@ class AudioRecorder:
             else:
                 self.recording.append(indata.copy())
 
+            # Streaming: push PCM to external consumer (non-blocking)
+            if self.on_audio_frame is not None and pcm_bytes:
+                try:
+                    self.on_audio_frame(pcm_bytes, self.fs)
+                except Exception:
+                    pass  # never block the audio thread
+
         # Helper to open stream with optional device and samplerate
         def _open(device, fs):
             kw = {"samplerate": fs, "channels": self.channels, "callback": callback}
             if device:
                 kw["device"] = device
             return sd.InputStream(**kw)
+
+        # Strategy: if the user set an explicit input device, use its default
+        # sample rate directly — avoids fallback to wrong device.
+        if dev_pref and dev_pref != "pulse":
+            try:
+                info = sd.query_devices(dev_pref, 'input')
+                dev_fs = int(info.get('default_samplerate') or 48000)
+                self.fs = dev_fs
+                self._chunk_target_frames = self.chunk_seconds * self.fs
+                if self.record_chunked and self._chunk_wave is not None:
+                    try:
+                        self._chunk_wave.close()
+                    except Exception:
+                        pass
+                    self._open_new_chunk()
+            except Exception:
+                pass  # fall through to standard logic
 
         # Try preferred sample rate on preferred device; then robust fallbacks
         tried_pulse = False
@@ -111,9 +149,14 @@ class AudioRecorder:
                 except Exception:
                     tried_pulse = True
                     pass
-            # Last resort: open without device hint
-            self.stream = _open(None, self.fs)
-            self.stream.start()
+            # Last resort: open with the original device (may work at its native rate)
+            try:
+                self.stream = _open(dev_pref, self.fs)
+                self.stream.start()
+            except Exception:
+                verr(f"[recorder] Still failed with {dev_pref}, trying default device")
+                self.stream = _open(None, self.fs)
+                self.stream.start()
 
     def stop_recording(self, preserve=False):
         if not self.is_recording:

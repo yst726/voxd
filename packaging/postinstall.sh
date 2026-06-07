@@ -37,23 +37,16 @@ fi
 
 echo "voxd installed. Each user should run: voxd --setup"
 
-# Create a local virtualenv to ensure missing Python deps (e.g., sounddevice) are available
-# We inherit system site-packages to avoid duplicating distro Python libs
+# ── Create venv and install Python deps ──────────────────────────────────────
 APPDIR="/opt/voxd"
 
-# Pick a Python >= 3.9 if available; attempt RPM install on openSUSE if too old
+# Pick a Python >= 3.9
 pick_python() {
   for c in python3.12 python3.11 python3.10 python3.9 python3 python; do
     if command -v "$c" >/dev/null 2>&1; then
-      ver="$("$c" - <<'PY'
-import sys
-print(f"{sys.version_info.major}.{sys.version_info.minor}")
-PY
-)"
-      case "$ver" in
-        3.9|3.10|3.11|3.12|3.13) echo "$c"; return 0 ;;
-        *) ;;
-      esac
+      ver="$("$c" -c 'import sys; print(sys.version_info.major * 100 + sys.version_info.minor)' 2>/dev/null)"
+      # Require Python >= 3.9 (value >= 309)
+      [ -n "$ver" ] && [ "$ver" -ge 309 ] 2>/dev/null && echo "$c" && return 0
     fi
   done
   echo ""
@@ -61,54 +54,28 @@ PY
 
 PY="$(pick_python)"
 
-# If no suitable python found, on zypper try to install a newer one
-if [ -z "$PY" ] && command -v zypper >/dev/null 2>&1; then
-  for pkg in python311 python3.11 python310 python3.10 python39 python3.9; do
-    if zypper --non-interactive --no-gpg-checks install -y "$pkg" >/dev/null 2>&1; then
-      break
-    fi
-  done
-  PY="$(pick_python)"
-fi
-
-if [ -n "$PY" ]; then
+if [ -z "$PY" ]; then
+  echo "[voxd] WARNING: No Python >= 3.9 found. Run 'voxd --setup' manually after installing Python."
+else
+  echo "[voxd] Setting up Python venv at $APPDIR/.venv ..."
   if [ ! -x "$APPDIR/.venv/bin/python" ]; then
-    "$PY" -m venv --system-site-packages "$APPDIR/.venv" >/dev/null 2>&1 || true
+    "$PY" -m venv --system-site-packages "$APPDIR/.venv" 2>&1 || echo "[voxd] WARNING: venv creation failed (install python3-venv). Run 'voxd --setup' manually."
   fi
+
   if [ -x "$APPDIR/.venv/bin/python" ]; then
     VPY="$APPDIR/.venv/bin/python"
-    # Upgrade pip quietly; then install minimal extras that may be missing from repos
-    "$VPY" -m pip install --upgrade --disable-pip-version-check pip >/dev/null 2>&1 || true
-    # Ensure core runtime dependencies inside app venv (covers Leap mismatches)
-    "$VPY" -m pip install --disable-pip-version-check --no-input "sounddevice>=0.5" psutil numpy requests pyyaml tqdm pyperclip >/dev/null 2>&1 || true
-    # Ensure platformdirs (imported by voxd.core.config); install only if missing
-    "$VPY" - <<'PY' 2>/dev/null || "$VPY" -m pip install --disable-pip-version-check --no-input platformdirs >/dev/null 2>&1 || true
-try:
-    import platformdirs  # type: ignore
-except Exception:
-    raise SystemExit(1)
-PY
-    # Ensure importlib_resources backport for older Python (e.g., openSUSE Leap)
-    "$VPY" - <<'PY' 2>/dev/null || "$VPY" -m pip install --disable-pip-version-check --no-input importlib-resources >/dev/null 2>&1 || true
-try:
-    import importlib_resources  # type: ignore
-except Exception:
-    raise SystemExit(1)
-PY
-    # Ensure PyQt6 (RPM/openSUSE may not provide python3-qt6)
-    "$VPY" - <<'PY' 2>/dev/null || "$VPY" -m pip install --disable-pip-version-check --no-input PyQt6 >/dev/null 2>&1 || true
-try:
-    import PyQt6  # type: ignore
-except Exception:
-    raise SystemExit(1)
-PY
-    # Ensure pyqtgraph (optional UI component used by Flux/Tuner)
-    "$VPY" - <<'PY' 2>/dev/null || "$VPY" -m pip install --disable-pip-version-check --no-input pyqtgraph >/dev/null 2>&1 || true
-try:
-    import pyqtgraph  # type: ignore
-except Exception:
-    raise SystemExit(1)
-PY
+    echo "[voxd] Installing Python dependencies (this may take a minute)..."
+    "$VPY" -m pip install --upgrade --disable-pip-version-check -q pip 2>&1 || true
+    "$VPY" -m pip install --disable-pip-version-check -q \
+      "sounddevice>=0.5" psutil numpy requests pyyaml tqdm pyperclip websockets \
+      platformdirs 2>&1 || echo "[voxd] WARNING: Some pip packages failed. Run 'voxd --setup' to retry."
+    # Additional optional packages: try silently, warn on failure
+    for pkg in importlib-resources PyQt6 pyqtgraph; do
+      "$VPY" -c "import ${pkg%%-*}" 2>/dev/null || \
+        "$VPY" -m pip install --disable-pip-version-check -q "$pkg" 2>/dev/null || \
+        echo "[voxd] WARNING: Optional package '$pkg' not installed. Some features may be unavailable."
+    done
+    echo "[voxd] Venv setup complete."
   fi
 fi
 

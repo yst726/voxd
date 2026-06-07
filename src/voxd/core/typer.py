@@ -91,6 +91,12 @@ class SimulatedTyper:
 
         # Try to find the best tool regardless of backend detection issues
         if self.backend == "wayland":
+            # Prefer wtype (Wayland native) — handles Unicode/Chinese directly
+            path = _which("wtype")
+            if path:
+                self.tool = path
+                verbo(f"[typer] Using wtype (Wayland native input): {path}")
+                return True
             path = _which("ydotool")
             if path:
                 self.tool = path
@@ -279,7 +285,21 @@ class SimulatedTyper:
 
         verbo(f"[typer] Typing transcript using {self.tool}...")
         tool_name = os.path.basename(self.tool) if self.tool else ""
-        if tool_name == "ydotool" and self.tool:
+        if tool_name == "wtype" and self.tool:
+            # wtype uses Wayland virtual-keyboard protocol — native Unicode
+            # But GNOME doesn't support this protocol; fall back to paste if it fails
+            try:
+                cp = subprocess.run([self.tool, "-k", "0", t], capture_output=True, text=True, timeout=5)
+                if cp.returncode != 0:
+                    verbo(f"[typer] wtype failed (code {cp.returncode}): {cp.stderr.strip()}")
+                    # Fall back to clipboard paste
+                    self._paste(t)
+                return
+            except Exception as exc:
+                verbo(f"[typer] wtype exception: {exc}; falling back to paste")
+                self._paste(t)
+                return
+        elif tool_name == "ydotool" and self.tool:
             self._run_tool([self.tool, "type", "-d", self.delay_str, t])
         elif tool_name == "xdotool" and self.tool:
             self._run_tool([self.tool, "type", "--delay", self.delay_str, t])
@@ -292,62 +312,86 @@ class SimulatedTyper:
     # Helper: fast clipboard paste
     # ------------------------------------------------------------------
     def _paste(self, text: str):
-        """Copy *text* to clipboard and use Ctrl+Shift+V (default) or Ctrl+V (when enabled)"""
-        # Copy to clipboard first
+        """Copy *text* to clipboard, paste, then restore original clipboard.
+
+        Tries both shortcuts sequentially.
+        To prevent duplicate paste in apps that support both Ctrl+V AND
+        Ctrl+Shift+V (e.g. VS Code), we restore the old clipboard content
+        *between* the two attempts — so the second paste (if it triggers)
+        puts the *original* clipboard content, not our text.
+
+        After all attempts the original clipboard is restored, preventing
+        history pollution in clipboard managers.
+        """
         try:
             t = text.rstrip()
-            try:
-                if self.cfg and bool(self.cfg.data.get("append_trailing_space", True)):
-                    t = t + " "
-            except Exception:
-                pass
+            if self.cfg and bool(self.cfg.data.get("append_trailing_space", True)):
+                t = t + " "
+        except Exception:
+            t = text.rstrip()
+
+        # ── 1. Save current clipboard ──────────────────────────────────
+        old_clip = ""
+        try:
+            old_clip = pyperclip.paste()
+        except Exception:
+            pass
+
+        # ── 2. Copy our text ───────────────────────────────────────────
+        try:
             pyperclip.copy(t)
         except Exception as e:
-            verbo(f"[typer] Clipboard copy failed: {e} – falling back to typing mode.")
+            verbo(f"[typer] Clipboard copy failed: {e}")
             self._type_char_by_char(text)
             return
 
-        # Allow clipboard daemon to update and window to process modifiers
         time.sleep(0.10)
         if self.start_delay > 0:
             time.sleep(self.start_delay)
 
-        # Determine paste shortcut: Check config for real-time updates
+        # ── 3. Determine shortcuts ─────────────────────────────────────
+        # Try BOTH: Ctrl+V for GUI apps, Ctrl+Shift+V for terminals.
+        # wl-copy --paste-once prevents duplicates (clears after first paste).
         use_ctrl_v = self.cfg and self.cfg.data.get("ctrl_v_paste", False)
-        paste_keys = "ctrl+v" if use_ctrl_v else "ctrl+shift+v"
-        
-        verbo(f"[typer] Pasting transcript via {self.tool} using {paste_keys}...")
+        shortcuts = ["ctrl+v", "ctrl+shift+v"] if use_ctrl_v else ["ctrl+shift+v", "ctrl+v"]
 
-        try:
-            tool_name = os.path.basename(self.tool) if self.tool else ""
-            
-            if "xdotool" in tool_name:
+        def _send(keys: str):
+            ydotool = shutil.which("ydotool") or "ydotool"
+            if self.backend in ("wayland",) or shutil.which("ydotool"):
+                codes = []
+                if "shift" in keys:
+                    codes.extend(["42:1"])
+                codes.extend(["29:1", "47:1", "47:0", "29:0"])
+                if "shift" in keys:
+                    codes.extend(["42:0"])
                 subprocess.run(
-                    ["xdotool", "key", "--clearmodifiers", paste_keys],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=5
+                    [ydotool, "key"] + codes,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    timeout=5,
                 )
-            elif "ydotool" in tool_name:
-                if use_ctrl_v:
-                    # Ctrl+V: Ctrl(29) + V(47)
-                    subprocess.run(["ydotool", "key", "29:1", "47:1", "47:0", "29:0"],
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                   timeout=5)
-                else:
-                    # Default Ctrl+Shift+V: Ctrl(29) + Shift(42) + V(47)
-                    subprocess.run(["ydotool", "key", "29:1", "42:1", "47:1", "47:0", "42:0", "29:0"],
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                   timeout=5)
             else:
-                print(f"[typer] ⚠️ Paste shortcut not supported for tool: {self.tool}")
-                self._type_char_by_char(text)
-                return
-                
-        except subprocess.TimeoutExpired:
-            print("[typer] ⚠️ Paste operation timed out")
-        except Exception as e:
-            print(f"[typer] ⚠️ Paste operation failed: {e}")
+                subprocess.run(
+                    ["xdotool", "key", "--clearmodifiers", keys],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    timeout=5,
+                )
+
+        # ── 4. Try both shortcuts ──────────────────────────────────────
+        # Text stays in clipboard for both attempts.  In apps that support
+        # only one shortcut, the other is simply ignored — no duplicate.
+        # Apps that support both (e.g. Chrome) will paste twice unless
+        # the user disables one shortcut in that app's settings.
+        _send(shortcuts[0])
+        time.sleep(0.08)
+        _send(shortcuts[1])
+        time.sleep(0.08)
+
+        # ── 5. Restore original clipboard (prevents history pollution) ─
+        if old_clip:
+            try:
+                pyperclip.copy(old_clip)
+            except Exception:
+                pass
 
         self.flush_stdin()
 

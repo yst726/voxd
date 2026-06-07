@@ -1,8 +1,8 @@
 # pyright: reportMissingImports=false
-from PyQt6.QtCore import QThread, pyqtSignal, Qt  # type: ignore
+from PyQt6.QtCore import QThread, pyqtSignal  # type: ignore
 from PyQt6.QtWidgets import (  # type: ignore
-    QDialog, QVBoxLayout, QPushButton, QFileDialog, QMessageBox,
-    QGroupBox, QHBoxLayout, QCheckBox, QComboBox, QLineEdit, QLabel,
+    QDialog, QVBoxLayout, QPushButton, QMessageBox,
+    QGroupBox, QHBoxLayout, QComboBox, QLineEdit, QLabel,
     QTextEdit, QDialogButtonBox, QRadioButton, QGridLayout, QLayout,
     QWidget
 )
@@ -10,7 +10,8 @@ import yaml
 from voxd.core.aipp import get_final_text
 from voxd.core.model_manager import show_model_manager
 from voxd.core.transcriber import WhisperTranscriber  # type: ignore
-from voxd.utils.languages import search_languages, code_to_name, normalize_lang_code, is_valid_lang
+from voxd.core.volcengine_transcriber import VolcengineTranscriber  # type: ignore
+from voxd.utils.languages import search_languages, normalize_lang_code, is_valid_lang
 
 class CoreProcessThread(QThread):
     finished = pyqtSignal(str)
@@ -33,34 +34,48 @@ class CoreProcessThread(QThread):
         from datetime import datetime
         import psutil
 
-        recorder = AudioRecorder()
+        # ── Select transcriber (Volcengine cloud or local whisper) ----------
+        use_volc = self.cfg.data.get("volcengine_asr_enabled", False)
+        if use_volc:
+            access_token = self.cfg.data.get("volcengine_access_token", "")
+            resource_id = self.cfg.data.get("volcengine_resource_id", "volc.seedasr.auc")
+            if not access_token:
+                print("[core] Volcengine ASR enabled but API key missing — falling back to whisper")
+                use_volc = False
+            else:
+                transcriber = VolcengineTranscriber(
+                    api_key=access_token,
+                    resource_id=resource_id,
+                )
 
-        # Ensure whisper-cli exists – attempt auto-build when missing
-        from voxd.utils.whisper_auto import ensure_whisper_cli  # local import to avoid GUI deps in headless tests
+        if not use_volc:
+            # Ensure whisper-cli exists – attempt auto-build when missing
+            from voxd.utils.whisper_auto import ensure_whisper_cli  # local import to avoid GUI deps in headless tests
 
-        try:
-            transcriber = WhisperTranscriber(
-                model_path=self.cfg.whisper_model_path,
-                binary_path=self.cfg.whisper_binary,
-                language=getattr(self.cfg, "language", "en"),
-            )
-        except FileNotFoundError:
-            # Try to build on the fly (GUI prompt)
-            if ensure_whisper_cli("gui") is None:
-                # User declined or build failed – abort gracefully
-                self.status_changed.emit("VOXD")
-                self.finished.emit("")
-                return
-            transcriber = WhisperTranscriber(
-                model_path=self.cfg.whisper_model_path,
-                binary_path=self.cfg.whisper_binary,
-                language=getattr(self.cfg, "language", "en"),
-            )
+            try:
+                transcriber = WhisperTranscriber(
+                    model_path=self.cfg.whisper_model_path,
+                    binary_path=self.cfg.whisper_binary,
+                    language=getattr(self.cfg, "language", "en"),
+                )
+            except FileNotFoundError:
+                # Try to build on the fly (GUI prompt)
+                if ensure_whisper_cli("gui") is None:
+                    # User declined or build failed – abort gracefully
+                    self.status_changed.emit("VOXD")
+                    self.finished.emit("")
+                    return
+                transcriber = WhisperTranscriber(
+                    model_path=self.cfg.whisper_model_path,
+                    binary_path=self.cfg.whisper_binary,
+                    language=getattr(self.cfg, "language", "en"),
+                )
         typer = SimulatedTyper(delay=self.cfg.typing_delay, start_delay=self.cfg.typing_start_delay, cfg=self.cfg)
         clipboard = ClipboardManager()
 
         # ── Recording ---------------------------------------------------
         rec_start_dt = datetime.now()
+
         recorder.start_recording()
         while not self.should_stop:
             self.msleep(100)
@@ -133,7 +148,7 @@ class CoreProcessThread(QThread):
                 "trans_eff": (trans_end_ts - trans_start_ts) / max(len(tscript), 1),
                 "transcript": tscript,
                 "usr_trans_acc": usr_trans_acc,
-                "trans_model": _P(self.cfg.whisper_model_path).name,
+                "trans_model": "volcengine_asr" if self.cfg.data.get("volcengine_asr_enabled") else _P(self.cfg.whisper_model_path).name,
                 "aipp_start_time": datetime.fromtimestamp(aipp_start_ts).strftime("%H:%M:%S") if aipp_start_ts else None,
                 "aipp_end_time": datetime.fromtimestamp(aipp_end_ts).strftime("%H:%M:%S") if aipp_end_ts else None,
                 "aipp_dur": (aipp_end_ts - aipp_start_ts) if aipp_start_ts and aipp_end_ts else None,

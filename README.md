@@ -25,6 +25,7 @@ Hit your <span style="color:#FF4500">**hotkey shortcut**</span> -> speak -> hotk
 | Feature                          | Notes                                                                   |
 | -------------------------------- | ----------------------------------------------------------------------- |
 | **Whisper.cpp** backend          | Local, offline, fast  ASR.   |
+| **Volcengine ASR** (cloud)       | Cloud streaming ASR via 火山引擎/豆包. Real-time, with live partial results & final correction. Better Chinese recognition. |
 | **Simulated typing**             | instantly types straight into any currently focused input window. Even on Wayland! (*ydotool*).  |
 | **Clipboard**                    | Auto-copies into clipboard - ready for pasting, if desired              |
 | **Languages**                    | 99+ languages. Provides default language config and session language override          |
@@ -169,6 +170,57 @@ language: sv  # or 'auto', 'es', etc.
 - **Change via GUI/Tray (persisted)**: Menu → **Language**. Saved to `~/.config/voxd/config.yaml` as `language`.
 - **Model note**: For non‑English languages, use a multilingual Whisper model (not `*.en.bin`). Install/switch via GUI “Whisper Models” or `voxd-model` (e.g., `ggml-base.bin`, `small`, `medium`, `large-v3`).
 - **Tip**: `auto` works well, but setting the exact language can improve accuracy. If you pick a non‑English language while using an English‑only model, VOXD will warn and transcription quality may drop.
+
+
+### ⌨️  Paste behaviour
+
+VOXD tries **both `Ctrl+V` and `Ctrl+Shift+V`** when pasting, to work across
+both GUI apps and terminals without configuration.  The clipboard is restored
+after pasting, so clipboard history is not polluted.
+
+**If you see duplicate text in an app** (e.g. Chrome / Chromium), that app
+supports both shortcuts.  Disable one:
+
+1. Open `chrome://settings/content/clipboard`
+2. Or install an extension that blocks one paste shortcut
+3. Alternatively set `ctrl_v_paste: true` in `~/.config/voxd/config.yaml`
+   to use `Ctrl+V` *only* (no fallback, no duplicates).
+
+
+### ☁️  Volcengine (火山引擎/豆包) Cloud ASR
+
+VOXD supports **cloud streaming ASR** via Volcengine as an alternative to the local whisper.cpp backend.
+It sends audio during recording (real-time), shows live partial results, and returns a final corrected text.
+
+#### Requirements
+- Network access to `openspeech.bytedance.com`
+- A Volcengine Speech account ([console](https://console.volcengine.com/speech/app))
+- `websockets` Python package (included since `voxd >= 1.4.1`)
+
+#### Configuration
+
+**Via Settings UI:** Options → Settings → **Volcengine ASR (cloud)**
+
+**Or edit `~/.config/voxd/config.yaml`:**
+```yaml
+volcengine_asr_enabled: true
+volcengine_access_token: "your-api-key"
+volcengine_resource_id: "volc.seedasr.auc"
+```
+
+#### Behaviour
+- During recording, the status bar shows **live partial** recognition text
+- When you stop, the server returns a **final corrected** transcript (based on full audio context)
+- The result goes through AIPP if enabled, then typed into the focused window
+
+#### Switching between local & cloud
+```yaml
+# whisper.cpp (default, offline)
+volcengine_asr_enabled: false
+
+# Volcengine cloud (streaming, better Chinese)
+volcengine_asr_enabled: true
+```
 
 
 ### 🎙️  Managing speech models
